@@ -1,0 +1,206 @@
+// RoboBattle Direct: drawing the floor and the HUD
+// The floor is drawn with screen.* BEFORE Chispita_draw (bots, effects on top),
+// the HUD AFTER it. Camera stays at 0,0 zoom 1, so world units = screen units.
+
+RB_COL_BG = "rgb(7,9,18)"
+RB_COL_PLATE = "rgb(107,122,143)"
+RB_COL_PLATE_B = "rgb(100,114,138)"
+RB_COL_EDGE = "rgb(42,51,64)"
+RB_COL_WARN = "rgb(242,169,59)"
+RB_COL_DECAY = "rgb(232,84,47)"
+RB_COL_SAFE = "rgb(63,193,201)"
+RB_COL_TEXT = "rgb(216,222,233)"
+RB_COL_MUTED = "rgb(125,138,163)"
+RB_COL_PANEL = "rgb(14,19,36)"
+
+RB_HUD_X = 122     // center x of the HUD column
+RB_HUD_W = 104
+
+rb_draw_floor = function()
+  screen.clear(RB_COL_BG)
+  local f = rb_floor_state
+  if not f then return end
+  // stars
+  for k = 0 to 40 by 1
+    local sx = -177 + ((k * 53) % 354)
+    local sy = -100 + ((k * 37) % 200)
+    screen.fillRect(sx, sy, 0.8, 0.8, "rgb(120,130,150)")
+  end
+  for cy = 0 to RB_H - 1 by 1
+    for cx = 0 to RB_W - 1 by 1
+      local i = rb_idx(cx, cy)
+      if not f.floor[i] then continue end
+      local x = rb_tile_x(cx)
+      local y = rb_tile_y(cy)
+      local col = RB_COL_PLATE
+      if (cx * 7 + cy * 13) % 5 == 0 then col = RB_COL_PLATE_B end
+      if f.patch[i] > 0 then col = "rgb(40,90,100)" end
+      screen.fillRect(x, y, RB_T - 1, RB_T - 1, col)
+      screen.drawRect(x, y, RB_T - 1, RB_T - 1, RB_COL_EDGE)
+      // rivets
+      screen.fillRect(x - RB_T / 2 + 2.5, y - RB_T / 2 + 2.5, 1, 1, RB_COL_EDGE)
+      screen.fillRect(x + RB_T / 2 - 2.5, y - RB_T / 2 + 2.5, 1, 1, RB_COL_EDGE)
+      screen.fillRect(x - RB_T / 2 + 2.5, y + RB_T / 2 - 2.5, 1, 1, RB_COL_EDGE)
+      screen.fillRect(x + RB_T / 2 - 2.5, y + RB_T / 2 - 2.5, 1, 1, RB_COL_EDGE)
+      if f.protect[i] > 0 then
+        screen.drawRect(x, y, RB_T - 3, RB_T - 3, RB_COL_SAFE)
+      end
+      if f.decay[i] > 0 then
+        local stage = 6 - f.decay[i]
+        rb_draw_cracks(x, y, stage)
+        screen.drawText("" + f.decay[i], x + RB_T / 2 - 2.5, y + RB_T / 2 - 3, 4, RB_COL_DECAY)
+      end
+    end
+  end
+  // the 3-beat preview
+  for p in rb_preview
+    local cx = p.i % RB_W
+    local cy = (p.i - cx) / RB_W
+    local x = rb_tile_x(cx)
+    local y = rb_tile_y(cy)
+    local n = 4 - p.step
+    screen.setLineWidth(n)
+    screen.drawRect(x, y, RB_T - 2, RB_T - 2, RB_COL_WARN)
+    screen.setLineWidth(1)
+    screen.drawText("" + p.step, x + RB_T / 2 - 2.5, y + RB_T / 2 - 3, 4, RB_COL_WARN)
+  end
+end
+
+rb_draw_cracks = function(x, y, stage)
+  screen.setLineWidth(1)
+  if stage >= 1 then screen.drawLine(x, y, x - 3, y + 4, RB_COL_DECAY) end
+  if stage >= 1 then screen.drawLine(x - 3, y + 4, x - 5, y + 6, RB_COL_DECAY) end
+  if stage >= 2 then screen.drawLine(x, y, x + 4, y - 2, RB_COL_DECAY) end
+  if stage >= 2 then screen.drawLine(x + 4, y - 2, x + 6, y - 5, RB_COL_DECAY) end
+  if stage >= 3 then screen.drawLine(x, y, x - 2, y - 5, RB_COL_DECAY) end
+  if stage >= 4 then screen.drawLine(x, y, x + 5, y + 3, RB_COL_DECAY) end
+  if stage >= 5 then screen.drawLine(x - 2, y - 5, x - 5, y - 6, RB_COL_DECAY) end
+end
+
+// ---------- HUD ----------
+rb_draw_hud = function()
+  local b = rb_bots[0]
+  if not b then return end
+  local hx = RB_HUD_X
+  screen.fillRect(hx, 0, RB_HUD_W + 8, 200, RB_COL_PANEL)
+
+  screen.drawText("PLATES " + rb_count(rb_floor_state.floor) + "/" + (RB_W * RB_H), hx, 92, 5, RB_COL_WARN)
+  screen.drawText("TICK " + rb_beat_count, hx - 30, 84, 5, RB_COL_MUTED)
+  local lives = ""
+  for k = 1 to b.lives by 1
+    lives = lives + "*"
+  end
+  screen.drawText("LIVES " + lives, hx + 20, 84, 5, RB_COL_TEXT)
+  screen.drawText("HITS " + b.hits + "/" + RB_HITS_PER_LIFE, hx - 28, 77, 5, RB_COL_DECAY)
+  screen.drawText("DIRECT", hx + 24, 77, 5, RB_COL_MUTED)
+
+  screen.drawText("MOVE  arrows / WASD", hx, 60, 4, RB_COL_MUTED)
+  screen.drawText("one plate per press, hold to run", hx, 53, 3.5, RB_COL_MUTED)
+
+  // laser cooldown
+  local lf = 0
+  if b.cd_laser > 0 then lf = b.cd_laser / RB_LASER_COOLDOWN end
+  screen.drawText("LASER  space", hx - 26, 40, 4, rb_family_color.attack)
+  screen.drawRect(hx + 22, 40, 50, 4, RB_COL_EDGE)
+  screen.fillRect(hx + 22 - 25 * lf, 40, 50 * (1 - lf), 4, rb_family_color.attack)
+
+  // abilities with cooldown bars
+  screen.drawText("ABILITIES", hx - 32, 26, 4, RB_COL_MUTED)
+  local keys = ["Q", "F", "E", "R"]
+  for k = 0 to rb_abilities.length - 1 by 1
+    local a = rb_abilities[k]
+    local x = hx - 39 + k * 26
+    local y = 10
+    local ready = b.cd_ability[k] <= 0
+    local col = RB_COL_EDGE
+    if ready then col = rb_family_color[a.family] end
+    local hover = rb_point_in_box(mouse.x, mouse.y, x, y, 24, 24)
+    if hover and ready then screen.fillRect(x, y, 24, 24, "rgb(30,38,56)") end
+    screen.drawRect(x, y, 24, 24, col)
+    screen.drawText(keys[k], x, y + 7, 4, RB_COL_MUTED)
+    screen.drawText(a.name, x, y, 4, RB_COL_TEXT)
+    if ready then
+      screen.drawText("ready", x, y - 8, 3, RB_COL_MUTED)
+    else
+      local frac = b.cd_ability[k] / RB_ABILITY_COOLDOWN
+      screen.fillRect(x, y - 8, 22 * (1 - frac), 2, RB_COL_TEXT)
+    end
+  end
+
+  screen.drawText("ENTER restart   F1 debug", hx, -14, 3.5, RB_COL_MUTED)
+  if b.msg_time > 0 then screen.drawText(b.msg, hx, -24, 4.5, RB_COL_TEXT) end
+
+  if rb_info_id >= 0 then
+    local a = rb_abilities[rb_info_id]
+    screen.fillRect(hx, -44, RB_HUD_W, 20, "rgb(20,26,43)")
+    screen.drawText(a.name, hx, -38, 4.5, rb_family_color[a.family])
+    rb_draw_wrapped(a.text, hx, -44, 3, RB_COL_TEXT, 34)
+  end
+
+  rb_draw_rivals()
+  rb_draw_game_over()
+end
+
+// clickable ability boxes
+rb_point_in_box = function(px, py, x, y, w, h)
+  return px >= x - w / 2 and px <= x + w / 2 and py >= y - h / 2 and py <= y + h / 2
+end
+rb_ability_at = function(px, py)
+  for k = 0 to rb_abilities.length - 1 by 1
+    if rb_point_in_box(px, py, RB_HUD_X - 39 + k * 26, 10, 24, 24) then return k end
+  end
+  return -1
+end
+
+rb_draw_rivals = function()
+  local n = rb_bots.length - 1
+  if n <= 0 then return end
+  local w = 74
+  local left = RB_OX - (n * w) / 2 + w / 2
+  local k = 0
+  for b in rb_bots
+    if b.index == 0 then continue end
+    local x = left + k * w
+    local y = 92
+    screen.fillRect(x, y, w - 4, 14, RB_COL_PANEL)
+    screen.drawRect(x, y, w - 4, 14, RB_COL_EDGE)
+    screen.fillRect(x - w / 2 + 5, y, 3, 10, b.color)
+    screen.drawText(b.name, x - w / 2 + 18, y + 3.5, 3.5, RB_COL_TEXT)
+    local lives = ""
+    for q = 1 to b.lives by 1
+      lives = lives + "*"
+    end
+    if b.dead == -1 then lives = "OUT" end
+    screen.drawText(lives, x - w / 2 + 18, y - 3, 3, RB_COL_MUTED)
+    screen.drawText("HITS " + b.hits, x + w / 2 - 18, y, 2.5, RB_COL_DECAY)
+    k += 1
+  end
+end
+
+rb_draw_game_over = function()
+  if not rb_game_over then return end
+  screen.fillRect(RB_OX, 0, 150, 30, "rgb(14,19,36)")
+  screen.drawRect(RB_OX, 0, 150, 30, RB_COL_WARN)
+  screen.drawText(rb_game_over, RB_OX, 5, 8, RB_COL_TEXT)
+  screen.drawText("press ENTER to restart", RB_OX, -6, 5, RB_COL_MUTED)
+end
+
+// word-wrap small text by character count, up to 4 lines
+rb_draw_wrapped = function(text, x, y, size, color, per_line)
+  local words = text.split(" ")
+  local line = ""
+  local row = 0
+  for w in words
+    if (line + " " + w).length > per_line then
+      screen.drawText(line, x, y - row * (size + 1.5), size, color)
+      row += 1
+      line = w
+      if row >= 4 then return end
+    elsif line == "" then
+      line = w
+    else
+      line = line + " " + w
+    end
+  end
+  if line != "" then screen.drawText(line, x, y - row * (size + 1.5), size, color) end
+end

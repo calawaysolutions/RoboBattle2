@@ -1,0 +1,97 @@
+// RoboBattle Direct: AI rivals
+// Each time its move cooldown clears, an AI scores the four neighboring plates and staying put,
+// weighs the laser against them, and acts. Same information a player has: the floor, the preview,
+// where the robots are and which way they face.
+
+rb_ai_new = function(bot, preset)
+  bot.ai = object end
+  bot.ai.aggression = preset.aggression
+  bot.ai.mistake = preset.mistake
+  bot.ai.reaction = preset.reaction
+  bot.name = preset.name
+end
+
+rb_ai_in_line = function(sx, sy, facing, tx, ty)
+  local dx = rb_face_dx(facing)
+  local dy = rb_face_dy(facing)
+  for n = 1 to RB_LASER_RANGE by 1
+    if sx + dx * n == tx and sy + dy * n == ty then return 1 end
+  end
+  return 0
+end
+
+// how good is it to stand on cx, cy facing `facing`, arriving `arrive` ticks from now
+rb_ai_tile_score = function(bot, cx, cy, facing, arrive)
+  local f = rb_floor_state
+  if not rb_in(cx, cy) then return -1000 end
+  local i = rb_idx(cx, cy)
+  if not f.floor[i] then return -1000 end
+  local score = 0
+  for p in rb_preview
+    if p.i == i and p.step <= arrive + 1 then score -= 500 end
+    if p.i == i and p.step > arrive + 1 then score -= 60 end
+  end
+  if f.decay[i] > 0 and f.decay[i] <= arrive + 1 then score -= 400 end
+  if f.decay[i] > arrive + 1 then score -= 40 end
+  if f.protect[i] > 0 then score += 15 end
+  if rb_is_frontier(f.floor, i) then score -= 12 end
+  score -= 4 * rb_dist_center(i)
+  for other in rb_bots
+    if other == bot or other.dead then continue end
+    if other.cx == cx and other.cy == cy then score -= 300 end
+    local d = abs(other.cx - cx) + abs(other.cy - cy)
+    score -= bot.ai.aggression * 3 * d
+    if rb_ai_in_line(cx, cy, facing, other.cx, other.cy) then score += 25 * bot.ai.aggression end
+    if rb_ai_in_line(other.cx, other.cy, other.facing, cx, cy) then score -= 18 end
+  end
+  return score
+end
+
+rb_ai_update = function(b)
+  if b.dead or rb_game_over or b.cd_move > 0 then return end
+  // can I shoot someone right now?
+  if b.cd_laser <= 0 then
+    for other in rb_bots
+      if other != b and not other.dead and rb_ai_in_line(b.cx, b.cy, b.facing, other.cx, other.cy) then
+        rb_bot_try_laser(b)
+        b.cd_move = RB_ACTION * 0.6
+        return
+      end
+    end
+  end
+  // reinforce when my plate is about to go (patient bots only)
+  if b.cd_ability[3] <= 0 and b.ai.aggression < 0.6 then
+    local i = rb_idx(b.cx, b.cy)
+    for pv in rb_preview
+      if pv.i == i then
+        rb_bot_try_ability(b, 3)
+        return
+      end
+    end
+  end
+  // score the four moves and staying put
+  local stay = rb_ai_tile_score(b, b.cx, b.cy, b.facing, 0) - 4
+  local best = -1
+  local best_s = stay
+  local second = -1
+  local second_s = -99999
+  for d = 0 to 3 by 1
+    local s = rb_ai_tile_score(b, b.cx + RB_DX[d], b.cy + RB_DY[d], d, 1) + random.next() * 4
+    if s > best_s then
+      second = best
+      second_s = best_s
+      best = d
+      best_s = s
+    elsif s > second_s then
+      second = d
+      second_s = s
+    end
+  end
+  local pick = best
+  if second >= 0 and random.next() < b.ai.mistake then pick = second end
+  if pick >= 0 then
+    rb_bot_try_move(b, pick)
+  else
+    b.cd_move = RB_ACTION * 0.5 + b.ai.reaction   // stay, think again soon
+  end
+end

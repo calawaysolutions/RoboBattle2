@@ -1,0 +1,326 @@
+// RoboBattle: the floor and the shred
+// A grid of plates that erodes one plate per shred tick. Rule: the floor never splits.
+// Ported from the Floor Simulator. Everything here works on a state object so the
+// 3-beat preview can run on a copy.
+
+// All numbers live in rb_config (RB_W, RB_H, RB_T, RB_CAP, RB_TARGET_BEATS, ...).
+
+// ---------- seeded random (Park-Miller), so the preview matches the real shred ----------
+rb_rng_new = function(seed)
+  local r = object end
+  r.s = seed % 2147483647
+  if r.s <= 0 then r.s += 2147483646 end
+  return r
+end
+rb_rng_next = function(r)
+  r.s = (r.s * 16807) % 2147483647
+  return r.s / 2147483647
+end
+rb_rng_clone = function(r)
+  local c = object end
+  c.s = r.s
+  return c
+end
+
+// ---------- grid helpers ----------
+rb_idx = function(cx, cy)
+  return cy * RB_W + cx
+end
+rb_in = function(cx, cy)
+  return cx >= 0 and cy >= 0 and cx < RB_W and cy < RB_H
+end
+rb_tile_x = function(cx)
+  return RB_OX - RB_W * RB_T / 2 + (cx + 0.5) * RB_T
+end
+rb_tile_y = function(cy)
+  return RB_OY - RB_H * RB_T / 2 + (cy + 0.5) * RB_T
+end
+rb_list_fill = function(n, value)
+  local l = []
+  for i = 1 to n by 1
+    l.push(value)
+  end
+  return l
+end
+rb_list_copy = function(src)
+  local l = []
+  for v in src
+    l.push(v)
+  end
+  return l
+end
+
+RB_DX = [1, -1, 0, 0]
+RB_DY = [0, 0, 1, -1]
+
+rb_count = function(floor)
+  local n = 0
+  for v in floor
+    n += v
+  end
+  return n
+end
+
+// Number of connected chunks of floor (4-neighbor). Must always be 1.
+rb_components = function(floor)
+  local n = floor.length
+  local seen = rb_list_fill(n, 0)
+  local chunks = 0
+  for i = 0 to n - 1 by 1
+    if not floor[i] or seen[i] then continue end
+    chunks += 1
+    local stack = [i]
+    seen[i] = 1
+    while stack.length > 0
+      local k = stack[stack.length - 1]
+      stack.removeAt(stack.length - 1)
+      local x = k % RB_W
+      local y = (k - x) / RB_W
+      for d = 0 to 3 by 1
+        local nx = x + RB_DX[d]
+        local ny = y + RB_DY[d]
+        if not rb_in(nx, ny) then continue end
+        local j = ny * RB_W + nx
+        if floor[j] and not seen[j] then
+          seen[j] = 1
+          stack.push(j)
+        end
+      end
+    end
+  end
+  return chunks
+end
+
+rb_connected_without = function(floor, i)
+  floor[i] = 0
+  local ok = rb_components(floor) <= 1
+  floor[i] = 1
+  return ok
+end
+
+rb_is_frontier = function(floor, i)
+  local x = i % RB_W
+  local y = (i - x) / RB_W
+  for d = 0 to 3 by 1
+    local nx = x + RB_DX[d]
+    local ny = y + RB_DY[d]
+    if not rb_in(nx, ny) then return 1 end
+    if not floor[ny * RB_W + nx] then return 1 end
+  end
+  return 0
+end
+
+rb_dist_center = function(i)
+  local x = i % RB_W
+  local y = (i - x) / RB_W
+  return Chispita_distance(x, y, (RB_W - 1) / 2, (RB_H - 1) / 2)
+end
+
+// ---------- floor state ----------
+rb_floor_new = function(seed)
+  local f = object end
+  f.floor = rb_list_fill(RB_W * RB_H, 1)   // 1 = plate, 0 = void
+  f.decay = rb_list_fill(RB_W * RB_H, 0)   // beats until a decaying plate falls (0 = not decaying)
+  f.protect = rb_list_fill(RB_W * RB_H, 0) // beats of Reinforce left
+  f.patch = rb_list_fill(RB_W * RB_H, 0)   // beats of Patch left (a patched plate is floor while > 0)
+  f.rng = rb_rng_new(seed)
+  f.tick = 0
+  return f
+end
+
+rb_floor_clone = function(f)
+  local c = object end
+  c.floor = rb_list_copy(f.floor)
+  c.decay = rb_list_copy(f.decay)
+  c.protect = rb_list_copy(f.protect)
+  c.patch = rb_list_copy(f.patch)
+  c.rng = rb_rng_clone(f.rng)
+  c.tick = f.tick
+  return c
+end
+
+// Pick one legal plate and remove it. Returns the index, or -1.
+rb_shred_once = function(f)
+  local floor = f.floor
+  if rb_count(floor) <= 1 then return -1 end
+  local cands = []
+  local weights = []
+  for i = 0 to floor.length - 1 by 1
+    if not floor[i] then continue end
+    if f.protect[i] > 0 then continue end
+    if not rb_is_frontier(floor, i) then continue end
+    cands.push(i)
+    weights.push(1 + RB_CENTER_PULL * rb_dist_center(i) / max(RB_W, RB_H))
+  end
+  local tries = 0
+  while cands.length > 0 and tries < 400
+    tries += 1
+    local sum = 0
+    for w in weights
+      sum += w
+    end
+    local r = rb_rng_next(f.rng) * sum
+    local k = cands.length - 1
+    for q = 0 to cands.length - 1 by 1
+      r -= weights[q]
+      if r <= 0 then
+        k = q
+        break
+      end
+    end
+    local i = cands[k]
+    if rb_connected_without(floor, i) then
+      floor[i] = 0
+      f.patch[i] = 0
+      return i
+    end
+    cands.removeAt(k)       // a bridge: never take it
+    weights.removeAt(k)
+  end
+  return -1
+end
+
+// One beat of the floor: decay timers, patch timers, then the shred.
+// Returns an object with fell (list of indices) and healed (decays that were nullified).
+rb_floor_beat = function(f)
+  f.tick += 1
+  local result = object end
+  result.fell = []
+  result.healed = []
+  local used = 0
+  local n = f.floor.length
+
+  for i = 0 to n - 1 by 1
+    if f.protect[i] > 0 then f.protect[i] -= 1 end
+  end
+
+  // decaying plates
+  for i = 0 to n - 1 by 1
+    if not f.decay[i] then continue end
+    if not f.floor[i] then
+      f.decay[i] = 0
+      continue
+    end
+    f.decay[i] -= 1
+    if f.decay[i] > 0 then continue end
+    if used < RB_CAP and f.protect[i] == 0 and rb_connected_without(f.floor, i) then
+      f.floor[i] = 0
+      f.patch[i] = 0
+      used += 1
+      result.fell.push(i)
+    else
+      result.healed.push(i)
+    end
+    f.decay[i] = 0
+  end
+
+  // patches expire back to void, but only when that keeps the floor whole
+  for i = 0 to n - 1 by 1
+    if not f.patch[i] then continue end
+    f.patch[i] -= 1
+    if f.patch[i] > 0 then continue end
+    if used < RB_CAP and rb_connected_without(f.floor, i) then
+      f.floor[i] = 0
+      used += 1
+      result.fell.push(i)
+    else
+      f.patch[i] = 1   // holds one more beat and tries again
+    end
+  end
+
+  // the shred: as many plates as needed to stay on pace, within the cap
+  if f.tick % RB_SHRED_EVERY == 0 then
+    local left = rb_count(f.floor)
+    local beats_left = max(1, RB_TARGET_BEATS - f.tick)
+    local want = ceil(left / beats_left)
+    if want < 1 then want = 1 end
+    while want > 0 and used < RB_CAP
+      local i = rb_shred_once(f)
+      if i < 0 then break end
+      result.fell.push(i)
+      used += 1
+      want -= 1
+    end
+  end
+  return result
+end
+
+// The next 3 plates to fall, found by running the real rules on a copy.
+// Returns a list of objects with i and step (1 = next beat).
+rb_floor_preview = function(f, steps)
+  local copy = rb_floor_clone(f)
+  local out = []
+  for step = 1 to steps by 1
+    local r = rb_floor_beat(copy)
+    for i in r.fell
+      if not f.decay[i] then
+        local p = object end
+        p.i = i
+        p.step = step
+        out.push(p)
+      end
+    end
+  end
+  return out
+end
+
+// Card effects on the floor
+rb_floor_decay_tile = function(f, i)
+  if f.floor[i] and not f.decay[i] and f.protect[i] == 0 then f.decay[i] = RB_DECAY_BEATS end
+end
+rb_floor_patch_tile = function(f, i)
+  if f.floor[i] then return 0 end
+  f.floor[i] = 1
+  f.patch[i] = RB_PATCH_BEATS
+  return 1
+end
+rb_floor_reinforce = function(f, cx, cy)
+  for d = -1 to 3 by 1
+    local nx = cx
+    local ny = cy
+    if d >= 0 then
+      nx = cx + RB_DX[d]
+      ny = cy + RB_DY[d]
+    end
+    if not rb_in(nx, ny) then continue end
+    local i = rb_idx(nx, ny)
+    if f.floor[i] then
+      f.protect[i] = RB_REINFORCE_BEATS
+      f.decay[i] = 0
+    end
+  end
+end
+
+// Best plate to respawn on: floor, not about to fall, closest to the floor's center of mass.
+rb_floor_safe_tile = function(f, preview)
+  local sx = 0
+  local sy = 0
+  local n = 0
+  for i = 0 to f.floor.length - 1 by 1
+    if not f.floor[i] then continue end
+    sx += i % RB_W
+    sy += (i - i % RB_W) / RB_W
+    n += 1
+  end
+  if n == 0 then return -1 end
+  sx /= n
+  sy /= n
+  local best = -1
+  local best_d = 99999
+  for i = 0 to f.floor.length - 1 by 1
+    if not f.floor[i] or f.decay[i] then continue end
+    local soon = 0
+    for p in preview
+      if p.i == i then soon = 1 end
+    end
+    if soon then continue end
+    local x = i % RB_W
+    local y = (i - x) / RB_W
+    local d = Chispita_distance(x, y, sx, sy)
+    if d < best_d then
+      best_d = d
+      best = i
+    end
+  end
+  return best
+end

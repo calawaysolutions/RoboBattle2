@@ -1,0 +1,83 @@
+// RoboBattle Direct: the floor clock and the match
+// Robots act on their own cooldowns; only the floor has a shared clock.
+
+rb_beat_count = 0        // floor ticks so far (the shred pacing counts these)
+rb_floor_state = 0
+rb_preview = []
+rb_game_over = 0
+rb_floor_timer = 0
+
+rb_game_start = function(seed)
+  rb_beat_count = 0
+  rb_game_over = 0
+  rb_floor_state = rb_floor_new(seed)
+  rb_preview = rb_floor_preview(rb_floor_state, RB_PREVIEW_BEATS)
+  rb_floor_timer = Chispita_every(RB_FLOOR_TICK, rb_floor_tick)
+end
+
+rb_floor_tick = function()
+  if rb_game_over then return end
+  rb_beat_count += 1
+  local r = rb_floor_beat(rb_floor_state)
+  for i in r.fell
+    rb_fx_plate_falls(i)
+  end
+  for i in r.healed
+    rb_fx_plate_heals(i)
+  end
+  rb_check_falls()
+  rb_preview = rb_floor_preview(rb_floor_state, RB_PREVIEW_BEATS)
+  for b in rb_bots
+    if b.dead > 0 then
+      b.dead -= 1
+      if b.dead == 0 then
+        b.dead = 1
+        rb_bot_respawn(b)
+      end
+    end
+  end
+  rb_check_match_end()
+end
+
+rb_check_match_end = function()
+  local alive = 0
+  local last = 0
+  for b in rb_bots
+    if b.dead != -1 then
+      alive += 1
+      last = b
+    end
+  end
+  if alive == 0 then
+    rb_game_over = "ALL ROBOTS DESTROYED"
+  elsif rb_bots.length > 1 and alive == 1 then
+    rb_game_over = last.name + " WINS"
+  elsif rb_count(rb_floor_state.floor) <= 1 then
+    rb_game_over = "LAST PLATE: DRAW"
+  end
+end
+
+// ---------- effects ----------
+rb_fx_plate_falls = function(i)
+  local cx = i % RB_W
+  local cy = (i - cx) / RB_W
+  local p = Chispita_addRect(rb_tile_x(cx), rb_tile_y(cy), RB_T - 1, RB_T - 1, physics_off)
+  p.color = "rgb(78,90,110)"
+  p.lifetime = 0.5
+  Chispita_setLayer(p, 0)
+  Chispita_tween(p, "alpha", 0, 0.5)
+  Chispita_tween(p, "y", p.y - 8, 0.5, "smooth")
+  Chispita_tween(p, "rotation", 18, 0.5)
+  Chispita_burst(p.x, p.y, 6, "rgb(216,222,233)", 30, 0.4, 1)
+end
+
+rb_fx_plate_heals = function(i)
+  local cx = i % RB_W
+  local cy = (i - cx) / RB_W
+  local p = Chispita_addRect(rb_tile_x(cx), rb_tile_y(cy), RB_T - 1, RB_T - 1, physics_off)
+  p.color = rb_family_color.arena
+  p.alpha = 0.6
+  p.lifetime = 0.6
+  Chispita_setLayer(p, 0)
+  Chispita_tween(p, "alpha", 0, 0.6)
+end

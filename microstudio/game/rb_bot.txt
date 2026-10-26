@@ -1,0 +1,200 @@
+// RoboBattle Direct: robots
+// A bot has a position, a facing, lives, hits, cooldowns and its sprites. No decks, no hands, no queue.
+
+rb_bots = []
+rb_player_colors = ["rgb(159,244,255)", "rgb(224,79,191)", "rgb(155,226,74)", "rgb(255,140,66)"]
+
+rb_bot_new = function(index, cx, cy, facing)
+  local b = object end
+  b.index = index
+  b.name = "P" + (index + 1)
+  b.color = rb_player_colors[index]
+  b.cx = cx
+  b.cy = cy
+  b.facing = facing
+  b.lives = RB_LIVES
+  b.hits = 0                  // laser hits taken on this life
+  b.dead = 0                  // floor ticks until respawn (0 = alive, -1 = out for good)
+  b.falling = 0
+  b.decay_charges = 0
+  b.msg = ""
+  b.msg_time = 0
+  b.ai = 0
+
+  // cooldowns, in seconds
+  b.cd_move = 0
+  b.cd_laser = 0
+  b.cd_ability = rb_list_fill(rb_abilities.length, 0)
+
+  // sprites, drawn in this order: shadow, player-color ring, dark body, visor (the visor marks the facing)
+  local x = rb_tile_x(cx)
+  local y = rb_tile_y(cy)
+  b.shadow = Chispita_addRect(x + 1, y - 1.5, RB_BOT_SIZE + 2, RB_BOT_SIZE + 2, physics_off)
+  b.shadow.color = "rgb(0,0,0)"
+  b.shadow.alpha = 0.45
+  Chispita_setLayer(b.shadow, 1)
+  b.ring = Chispita_addRect(x, y, RB_BOT_SIZE + 3, RB_BOT_SIZE + 3, physics_off)
+  b.ring.color = b.color
+  Chispita_setLayer(b.ring, 1)
+  b.sprite = Chispita_addRect(x, y, RB_BOT_SIZE, RB_BOT_SIZE, physics_off)
+  b.sprite.color = "rgb(22,28,42)"
+  b.sprite.sprite_name = b.name
+  Chispita_setLayer(b.sprite, 1)
+  b.visor = Chispita_addRect(x, y, RB_BOT_SIZE - 3, 2.5, physics_off)
+  b.visor.color = b.color
+  Chispita_setLayer(b.visor, 1)
+  b.core = Chispita_addRect(x, y, 2.5, 2.5, physics_off)
+  b.core.color = b.color
+  Chispita_setLayer(b.core, 1)
+
+  rb_bots.push(b)
+  return b
+end
+
+// ---------- actions with cooldowns ----------
+rb_bot_try_move = function(b, dir)
+  if b.dead or b.cd_move > 0 then return 0 end
+  rb_bot_move_dir(b, dir)
+  b.cd_move = RB_ACTION
+  if b.ai then b.cd_move += b.ai.reaction end
+  rb_check_falls()
+  return 1
+end
+
+rb_bot_try_laser = function(b)
+  if b.dead or b.cd_laser > 0 then return 0 end
+  rb_bot_laser(b)
+  b.cd_laser = RB_LASER_COOLDOWN
+  return 1
+end
+
+rb_bot_try_ability = function(b, k)
+  if b.dead or b.cd_ability[k] > 0 then return 0 end
+  local f = rb_abilities[k].run
+  f(b)
+  b.cd_ability[k] = RB_ABILITY_COOLDOWN
+  rb_check_falls()
+  return 1
+end
+
+rb_bot_update = function(b, dt)
+  if b.cd_move > 0 then b.cd_move -= dt end
+  if b.cd_laser > 0 then b.cd_laser -= dt end
+  for k = 0 to b.cd_ability.length - 1 by 1
+    if b.cd_ability[k] > 0 then b.cd_ability[k] -= dt end
+  end
+  if b.msg_time > 0 then b.msg_time -= dt end
+end
+
+// ---------- damage, falling, respawn ----------
+rb_bot_hit = function(b)
+  b.hits += 1
+  Chispita_burst(b.sprite.x, b.sprite.y, 10, rb_family_color.attack, 60, 0.4, 2)
+  Chispita_cameraShake(1.5, 0.15)
+  if b.hits >= RB_HITS_PER_LIFE then
+    rb_msg(b, "Destroyed")
+    rb_bot_lose_life(b)
+  else
+    rb_msg(b, "Hit " + b.hits + "/" + RB_HITS_PER_LIFE)
+  end
+end
+
+rb_bot_fall = function(b)
+  rb_msg(b, "Fell")
+  rb_bot_lose_life(b)
+end
+
+rb_bot_lose_life = function(b)
+  b.falling = 0
+  b.hits = 0
+  b.lives -= 1
+  Chispita_cameraShake(3, 0.3)
+  Chispita_burst(b.sprite.x, b.sprite.y, 24, b.color, 80, 0.6, 2)
+  Chispita_tween(b.sprite, "alpha", 0, 0.4)
+  Chispita_tween(b.visor, "alpha", 0, 0.4)
+  Chispita_tween(b.ring, "alpha", 0, 0.4)
+  Chispita_tween(b.core, "alpha", 0, 0.4)
+  Chispita_tween(b.shadow, "alpha", 0, 0.4)
+  if b.lives <= 0 then
+    b.dead = -1
+    rb_msg(b, "OUT")
+  else
+    b.dead = RB_RESPAWN_TICKS
+  end
+end
+
+rb_bot_respawn = function(b)
+  local taken = []
+  for other in rb_bots
+    if other != b and not other.dead then
+      local t = object end
+      t.i = rb_idx(other.cx, other.cy)
+      t.step = 1
+      taken.push(t)
+    end
+  end
+  for p in rb_preview
+    taken.push(p)
+  end
+  local i = rb_floor_safe_tile(rb_floor_state, taken)
+  if i < 0 then return end
+  b.cx = i % RB_W
+  b.cy = (i - b.cx) / RB_W
+  b.dead = 0
+  b.sprite.x = rb_tile_x(b.cx)
+  b.sprite.y = rb_tile_y(b.cy)
+  b.sprite.alpha = 1
+  b.visor.alpha = 1
+  b.ring.alpha = 1
+  b.core.alpha = 1
+  b.shadow.alpha = 0.45
+  b.decay_charges = 0
+  b.cd_move = 0
+  b.cd_laser = 0
+  rb_msg(b, "Back online")
+end
+
+// anyone standing on void goes down (called after every move and every floor tick)
+rb_check_falls = function()
+  for b in rb_bots
+    if b.dead then continue end
+    local on_floor = rb_in(b.cx, b.cy) and rb_floor_state.floor[rb_idx(b.cx, b.cy)]
+    if b.falling or not on_floor then rb_bot_fall(b) end
+  end
+end
+
+// ---------- visuals ----------
+rb_bot_animate_to = function(b, cx, cy)
+  Chispita_tween(b.sprite, "x", rb_tile_x(cx), 0.18, "smooth")
+  Chispita_tween(b.sprite, "y", rb_tile_y(cy), 0.18, "smooth")
+end
+
+rb_bot_update_visuals = function(b)
+  b.sprite.rotation = b.facing * 90
+  local off = RB_BOT_SIZE / 2 - 1.8
+  b.visor.x = b.sprite.x + rb_face_dx(b.facing) * off
+  b.visor.y = b.sprite.y + rb_face_dy(b.facing) * off
+  b.visor.rotation = b.facing * 90
+  b.ring.x = b.sprite.x
+  b.ring.y = b.sprite.y
+  b.ring.rotation = b.facing * 90
+  b.core.x = b.sprite.x
+  b.core.y = b.sprite.y
+  b.shadow.x = b.sprite.x + 1
+  b.shadow.y = b.sprite.y - 1.5
+  b.shadow.rotation = b.facing * 90
+  b.ring.alpha = 0.8 + 0.2 * sin(Chispita_gameTime() * 3)
+  if b.dead == -1 then
+    b.sprite.color = "rgb(60,60,70)"
+    b.ring.alpha = 0.2
+  elsif b.dead > 0 then
+    b.ring.alpha = 0
+  else
+    b.sprite.color = "rgb(22,28,42)"
+  end
+end
+
+rb_msg = function(b, text)
+  b.msg = text
+  b.msg_time = 1.5
+end

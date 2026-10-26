@@ -1,0 +1,73 @@
+// RoboBattle Direct: main
+// The no-cards version of RoboBattle: you drive the robot directly on the same shredding floor,
+// with the same laser, abilities on cooldowns, and AI rivals.
+// Needs the Chispita engine files and rb_config, rb_floor, rb_cards, rb_bot, rb_tick, rb_hud, rb_ai.
+
+rb_info_id = -1
+
+init = function()
+  rb_new_match()
+end
+
+rb_new_match = function()
+  Chispita_init()
+  chispita_mode = "topdown"
+  chispita_background = 0          // we clear and draw the floor ourselves, before Chispita_draw
+  chispita_particle_gravity = 0
+  rb_bots = []
+  rb_info_id = -1
+  rb_game_start(floor(random.next() * 100000) + 1)
+  rb_bot_new(0, RB_SPAWNS[0][0], RB_SPAWNS[0][1], RB_SPAWNS[0][2])
+  for k = 1 to min(RB_AI_COUNT, 3) by 1
+    local ai = rb_bot_new(k, RB_SPAWNS[k][0], RB_SPAWNS[k][1], RB_SPAWNS[k][2])
+    rb_ai_new(ai, RB_AI_PRESETS[k - 1])
+  end
+end
+
+rb_player_input = function(b)
+  // tap moves one plate; holding keeps moving at the action rate
+  if keyboard.RIGHT or keyboard.D then rb_bot_try_move(b, 0) end
+  if keyboard.UP or keyboard.W then rb_bot_try_move(b, 1) end
+  if keyboard.LEFT or keyboard.A then rb_bot_try_move(b, 2) end
+  if keyboard.DOWN or keyboard.S then rb_bot_try_move(b, 3) end
+  if keyboard.press.SPACE then rb_bot_try_laser(b) end
+  // abilities: Q jump, F decay (W is a move key), E patch, R reinforce
+  if keyboard.press.Q then rb_use_ability(b, 0) end
+  if keyboard.press.F then rb_use_ability(b, 1) end
+  if keyboard.press.E then rb_use_ability(b, 2) end
+  if keyboard.press.R then rb_use_ability(b, 3) end
+  if mouse.press and not Chispita_mouseOnDebug() then
+    local k = rb_ability_at(mouse.x, mouse.y)
+    if k >= 0 then rb_use_ability(b, k) end
+  end
+end
+
+rb_use_ability = function(b, k)
+  rb_info_id = k
+  rb_bot_try_ability(b, k)
+end
+
+update = function()
+  local dt = Chispita_deltaTime()
+  if keyboard.press.ENTER and rb_game_over then rb_new_match() end
+  if keyboard.press.F1 then Chispita_toggleDebug() end
+
+  local b = rb_bots[0]
+  if b and not rb_game_over then rb_player_input(b) end
+
+  for bot in rb_bots
+    rb_bot_update(bot, dt)
+    rb_bot_update_visuals(bot)
+    if bot.ai then rb_ai_update(bot) end
+  end
+
+  Chispita_watch("tick", rb_beat_count)
+  if b then Chispita_watch("cd_move", round(b.cd_move * 100) / 100) end
+  Chispita_update()
+end
+
+draw = function()
+  rb_draw_floor()
+  Chispita_draw()
+  rb_draw_hud()
+end

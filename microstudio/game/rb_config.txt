@@ -1,0 +1,51 @@
+// RoboBattle Direct: every tunable in one place.
+// This is the no-cards version: arrows move, Space fires, abilities on cooldowns, the floor on a timer.
+
+// ---------- pace ----------
+RB_ACTION = 0.35         // seconds between a robot's moves
+RB_LASER_COOLDOWN = 1.5
+RB_ABILITY_COOLDOWN = 8
+RB_FLOOR_TICK = 2.0      // seconds between floor shred ticks
+RB_PREVIEW_BEATS = 3     // how many ticks ahead the amber warning shows
+
+// ---------- robots ----------
+RB_LIVES = 3
+RB_HITS_PER_LIFE = 3     // laser hits that cost a life
+RB_RESPAWN_TICKS = 2     // floor ticks before a fallen robot returns
+RB_LASER_RANGE = 6       // plates
+RB_BOT_SIZE = 10         // drawn body in world units
+
+// ---------- the floor ----------
+RB_W = 16
+RB_H = 12
+RB_T = 14                // world units per plate
+RB_OX = -50              // arena center x (leaves the right side for the HUD)
+RB_OY = 0
+RB_CAP = 4               // most plates that may fall in one tick (shred + decay together)
+RB_CENTER_PULL = 2       // erosion weighting toward the edges (0 = pure random frontier)
+RB_SHRED_EVERY = 1       // shred every N ticks
+RB_TARGET_BEATS = 150    // the shred paces itself to finish the floor by this tick (150 x 2 s = 5 min)
+
+// ---------- ability numbers ----------
+RB_DECAY_STEPS = 10      // plates a Decay marks
+RB_DECAY_BEATS = 5       // floor ticks from stepping on a decaying plate until it falls
+RB_PATCH_BEATS = 8
+RB_REINFORCE_BEATS = 10
+
+// ---------- AI rivals ----------
+RB_AI_COUNT = 1          // how many AI robots join the match (0 to 3)
+rb_preset = function(name, aggression, mistake, reaction)
+  local p = object end
+  p.name = name
+  p.aggression = aggression   // 0..1 chases and shoots
+  p.mistake = mistake         // chance to take the second-best move
+  p.reaction = reaction       // extra seconds between its moves
+  return p
+end
+RB_AI_PRESETS = [
+  rb_preset("BULLY", 0.9, 0.10, 0.0),
+  rb_preset("GHOST", 0.5, 0.10, 0.1),
+  rb_preset("TURTLE", 0.2, 0.15, 0.3)
+]
+// spawn plates and facings for robot 0 (you) and the AI, in order: cx, cy, facing (0 right, 1 up, 2 left, 3 down)
+RB_SPAWNS = [[3, 5, 0], [12, 6, 2], [3, 9, 3], [12, 2, 1]]

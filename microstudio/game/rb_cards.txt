@@ -1,0 +1,131 @@
+// RoboBattle Direct: abilities, movement and the laser
+// No cards here. Abilities are functions on cooldowns, mapped to keys in main.
+
+rb_family_color = object end
+rb_family_color.move = "rgb(159,244,255)"
+rb_family_color.attack = "rgb(232,84,47)"
+rb_family_color.arena = "rgb(63,193,201)"
+rb_family_color.glitch = "rgb(120,120,130)"
+
+// ---------- facing helpers: 0 right, 1 up, 2 left, 3 down ----------
+rb_face_dx = function(facing)
+  if facing == 0 then return 1 end
+  if facing == 2 then return -1 end
+  return 0
+end
+rb_face_dy = function(facing)
+  if facing == 1 then return 1 end
+  if facing == 3 then return -1 end
+  return 0
+end
+
+// ---------- abilities (Q F E R) ----------
+rb_abilities = []
+
+rb_ability = function(id, name, family, text, run)
+  local a = object end
+  a.id = id
+  a.name = name
+  a.family = family
+  a.text = text
+  a.run = run
+  rb_abilities.push(a)
+end
+
+rb_run_jump = function(bot)
+  local tx = bot.cx + rb_face_dx(bot.facing) * 2
+  local ty = bot.cy + rb_face_dy(bot.facing) * 2
+  rb_bot_land(bot, tx, ty)
+end
+
+rb_run_decay = function(bot)
+  bot.decay_charges = RB_DECAY_STEPS
+  rb_msg(bot, "Decay armed: " + RB_DECAY_STEPS + " steps")
+end
+
+rb_run_patch = function(bot)
+  local tx = bot.cx + rb_face_dx(bot.facing)
+  local ty = bot.cy + rb_face_dy(bot.facing)
+  if rb_in(tx, ty) and rb_floor_patch_tile(rb_floor_state, rb_idx(tx, ty)) then
+    rb_msg(bot, "Patched")
+  else
+    rb_msg(bot, "Patch: nothing to patch")
+  end
+end
+
+rb_run_reinf = function(bot)
+  rb_floor_reinforce(rb_floor_state, bot.cx, bot.cy)
+  rb_msg(bot, "Reinforced")
+end
+
+rb_ability("jump", "Jump", "move", "Hop 2 plates forward, skipping the plate in between. You fall only if the landing plate is gone.", rb_run_jump)
+rb_ability("decay", "Decay", "arena", "The next 10 plates you step on start decaying and fall 5 ticks later. Your own trail can hurt you. A fall that would split the floor is cancelled.", rb_run_decay)
+rb_ability("patch", "Patch", "arena", "Restore the void plate in front of you for 8 ticks.", rb_run_patch)
+rb_ability("reinf", "Reinforce", "arena", "Your plate and its 4 neighbors cannot shred or decay for 10 ticks.", rb_run_reinf)
+
+// ---------- movement ----------
+// Move one plate in an absolute direction and face it. Another robot on the plate blocks the move.
+rb_bot_move_dir = function(bot, dir)
+  bot.facing = dir
+  rb_bot_land(bot, bot.cx + rb_face_dx(dir), bot.cy + rb_face_dy(dir))
+end
+
+rb_bot_land = function(bot, tx, ty)
+  for other in rb_bots
+    if other != bot and not other.dead and other.cx == tx and other.cy == ty then
+      rb_msg(bot, "Bumped " + other.name)
+      Chispita_burst(rb_tile_x(tx), rb_tile_y(ty), 6, "rgb(216,222,233)", 40, 0.3, 1)
+      return
+    end
+  end
+  bot.cx = tx
+  bot.cy = ty
+  rb_bot_animate_to(bot, tx, ty)
+  if not rb_in(tx, ty) or not rb_floor_state.floor[rb_idx(tx, ty)] then
+    bot.falling = 1
+    return
+  end
+  if bot.decay_charges > 0 then
+    rb_floor_decay_tile(rb_floor_state, rb_idx(tx, ty))
+    bot.decay_charges -= 1
+  end
+end
+
+// ---------- the laser ----------
+rb_bot_laser = function(bot)
+  local dx = rb_face_dx(bot.facing)
+  local dy = rb_face_dy(bot.facing)
+  local length = 0
+  local hit = 0
+  for n = 1 to RB_LASER_RANGE by 1
+    local tx = bot.cx + dx * n
+    local ty = bot.cy + dy * n
+    if not rb_in(tx, ty) then break end
+    length = n
+    for other in rb_bots
+      if other != bot and not other.dead and other.cx == tx and other.cy == ty then
+        hit = other
+        break
+      end
+    end
+    if hit then break end
+  end
+  if length == 0 then return end
+  local mx = rb_tile_x(bot.cx) + dx * RB_T * (length + 1) / 2
+  local my = rb_tile_y(bot.cy) + dy * RB_T * (length + 1) / 2
+  local w = RB_T * length
+  local h = 2
+  if dy != 0 then
+    w = 2
+    h = RB_T * length
+  end
+  local beam = Chispita_addRect(mx, my, w, h, physics_off)
+  beam.color = rb_family_color.attack
+  beam.lifetime = 0.25
+  Chispita_setLayer(beam, 2)
+  Chispita_tween(beam, "alpha", 0, 0.25)
+  if hit then
+    rb_bot_hit(hit)
+    rb_msg(bot, "Laser hit")
+  end
+end
